@@ -3,8 +3,10 @@
 Deploy DeepSeek-V4-Flash-0731 across two NVIDIA DGX Spark nodes with SGLang.
 Use multi-node Tensor Parallel (TP=2) and DSPARK speculative decoding.
 
-This README gives complete step-by-step instructions to deploy on a DGX Spark
-cluster from a control machine.
+This README gives step-by-step instructions to deploy on a DGX Spark cluster
+from a control machine. If your nodes run DGX OS, start at [Quick Start](#quick-start).
+If your nodes run vanilla Ubuntu, do the [Appendix: Initial Setup](#appendix-initial-setup-for-non-dgx-os-systems)
+steps first.
 
 ---
 
@@ -13,25 +15,16 @@ cluster from a control machine.
 1. [Architecture Overview](#1-architecture-overview)
 2. [Cluster Topology](#2-cluster-topology)
 3. [Prerequisites](#3-prerequisites)
-4. [Step 1 — Set Up Passwordless SSH](#step-1--set-up-passwordless-ssh)
-5. [Step 2 — Install Docker and NVIDIA Container Toolkit](#step-2--install-docker-and-nvidia-container-toolkit)
-6. [Step 3 — Pull the SGLang Base Image](#step-3--pull-the-sglang-base-image)
-7. [Step 4 — Download Model Files](#step-4--download-model-files)
-8. [Step 5 — Configure Clustering Network](#step-5--configure-clustering-network)
-9. [Step 6 — Configure the Deployment](#step-6--configure-the-deployment)
-10. [Step 7 — Deploy](#step-7--deploy)
-11. [Step 8 — Verify](#step-8--verify)
-12. [Step 9 — Test Inference](#step-9--test-inference)
-13. [Step 10 — Monitor Logs](#step-10--monitor-logs)
-14. [Step 11 — Stop](#step-11--stop)
-15. [Configuration Reference](#configuration-reference)
-16. [How the Custom Image Works](#how-the-custom-image-works)
-17. [Manual Deployment (Without deploy-compose.sh)](#manual-deployment-without-deploy-composesh)
-18. [Legacy deploy.sh](#legacy-deploysh)
-19. [Known Issues and Workarounds](#known-issues-and-workarounds)
-20. [Model Architecture](#model-architecture)
-21. [File Listing](#file-listing)
-22. [References](#references)
+4. [Quick Start](#quick-start)
+5. [Configuration Reference](#configuration-reference)
+6. [How the Custom Image Works](#how-the-custom-image-works)
+7. [Manual Deployment (Without deploy-compose.sh)](#manual-deployment-without-deploy-composesh)
+8. [Legacy deploy.sh](#legacy-deploysh)
+9. [Known Issues and Workarounds](#known-issues-and-workarounds)
+10. [Model Architecture](#model-architecture)
+11. [File Listing](#file-listing)
+12. [References](#references)
+13. [Appendix: Initial Setup for Non-DGX-OS Systems](#appendix-initial-setup-for-non-dgx-os-systems)
 
 ---
 
@@ -104,175 +97,26 @@ Before you start, make sure you have:
 
 - Two DGX Spark nodes connected with a QSFP cable.
 - A control machine (laptop or workstation) with network access to both nodes.
-- The model files (DeepSeek-V4-Flash-0731, 156 GB).
-- Root or sudo access on both DGX Spark nodes.
+- The model files (DeepSeek-V4-Flash-0731, 156 GB) on both nodes.
+- Passwordless SSH from the control machine to both nodes.
+- Docker and Docker Compose on both nodes.
+- The SGLang base image (`lmsysorg/sglang:latest-cu130`) pulled on both nodes.
+
+**DGX OS note:** DGX OS comes with Docker, the NVIDIA Container Toolkit, GPU
+drivers, and RDMA tools pre-installed. If your nodes run DGX OS, the above
+items are already satisfied. You only need to copy the model files and set up
+passwordless SSH.
+
+**Non-DGX-OS note:** If your nodes run vanilla Ubuntu, follow the steps in
+[Appendix: Initial Setup](#appendix-initial-setup-for-non-dgx-os-systems) to
+install Docker, the NVIDIA Container Toolkit, configure the clustering
+network, and pull the base image.
 
 ---
 
-## Step 1 — Set Up Passwordless SSH
+## Quick Start
 
-The control machine must SSH into both DGX Spark nodes without a password.
-
-Run these commands on the control machine:
-
-```bash
-# Generate an SSH key if you do not have one
-ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
-
-# Copy the key to both nodes
-ssh-copy-id santanu@192.168.3.120
-ssh-copy-id santanu@192.168.3.121
-
-# Verify passwordless SSH works
-ssh santanu@192.168.3.120 "echo ok"
-ssh santanu@192.168.3.121 "echo ok"
-```
-
-If both commands print `ok`, continue to the next step.
-
----
-
-## Step 2 — Install Docker and NVIDIA Container Toolkit
-
-Install Docker and the NVIDIA Container Toolkit on both DGX Spark nodes.
-
-SSH into each node and run:
-
-```bash
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-# Log out and log back in for the group change to take effect
-
-# Install NVIDIA Container Toolkit
-distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get update
-sudo apt-get install -y nvidia-container-toolkit
-
-# Configure Docker to use the NVIDIA runtime
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
-
-Verify Docker and GPU access:
-
-```bash
-docker info
-docker run --rm --gpus all lmsysorg/sglang:latest-cu130 nvidia-smi
-```
-
-Verify Docker Compose:
-
-```bash
-docker compose version
-```
-
-If `docker compose` is not available, install the Compose plugin:
-
-```bash
-sudo apt-get install -y docker-compose-plugin
-```
-
----
-
-## Step 3 — Pull the SGLang Base Image
-
-Pull the SGLang base image on both nodes. This image is large. Use a fast
-network connection or be patient.
-
-Run on both nodes:
-
-```bash
-docker pull lmsysorg/sglang:latest-cu130
-```
-
-Verify the image is present:
-
-```bash
-docker images lmsysorg/sglang:latest-cu130
-```
-
----
-
-## Step 4 — Download Model Files
-
-Download the DeepSeek-V4-Flash-0731 model files to both nodes. The model is
-156 GB. Make sure both nodes have enough disk space.
-
-Run on both nodes:
-
-```bash
-mkdir -p /home/santanu/data/models/DeepSeek-V4-Flash-0731
-cd /home/santanu/data/models/DeepSeek-V4-Flash-0731
-
-# Download model files from Hugging Face or your preferred source
-# Example:
-# huggingface-cli download deepseek-ai/DeepSeek-V4-Flash-0731 \
-#   --local-dir /home/santanu/data/models/DeepSeek-V4-Flash-0731
-```
-
-Verify the model directory:
-
-```bash
-ls -la /home/santanu/data/models/DeepSeek-V4-Flash-0731/
-# You should see 48 .safetensors files and config.json
-```
-
----
-
-## Step 5 — Configure Clustering Network
-
-Connect the two DGX Spark nodes with a QSFP cable. Configure the clustering
-interface (RoCE) on both nodes.
-
-On Node 1 (ai1):
-
-```bash
-sudo ip addr add 192.168.100.10/24 dev enp1s0f1np1
-sudo ip link set enp1s0f1np1 up
-```
-
-On Node 2 (ai2):
-
-```bash
-sudo ip addr add 192.168.100.11/24 dev enp1s0f1np1
-sudo ip link set enp1s0f1np1 up
-```
-
-Verify connectivity:
-
-```bash
-# From Node 1
-ping -c 3 192.168.100.11
-
-# From Node 2
-ping -c 3 192.168.100.10
-```
-
-Find the RoCE HCA device name and GID index:
-
-```bash
-# On both nodes
-ibdev2netdev
-# Look for the device mapped to enp1s0f1np1 (e.g., rocep1s0f1)
-
-show_gids
-# Look for the GID index with RoCEv2 (IPv4) type
-```
-
-For a standard DGX Spark setup, the defaults are:
-
-- HCA: `rocep1s0f1`
-- GID index: `3`
-- Socket interface: `enp1s0f1np1`
-
----
-
-## Step 6 — Configure the Deployment
+### Step 1 — Configure the Deployment
 
 On the control machine, clone or copy this project directory. Then configure
 the environment file.
@@ -317,11 +161,11 @@ not need to change anything.
 
 ---
 
-## Step 7 — Deploy
+### Step 2 — Deploy
 
 Run the deployment script from the control machine.
 
-### First deployment (builds the image on each node)
+#### First deployment (builds the image on each node)
 
 ```bash
 ./deploy-compose.sh --build
@@ -340,19 +184,19 @@ The script does the following:
 7. Starts the head container on Node 1.
 8. Polls the health endpoint until the server is ready (up to 30 minutes).
 
-### Subsequent deployments (reuse existing image)
+#### Subsequent deployments (reuse existing image)
 
 ```bash
 ./deploy-compose.sh
 ```
 
-### Deploy without waiting for health
+#### Deploy without waiting for health
 
 ```bash
 ./deploy-compose.sh --no-wait
 ```
 
-### What to expect
+#### What to expect
 
 The model loading takes 5 to 10 minutes. During this time, the script prints
 progress messages:
@@ -369,7 +213,7 @@ commands.
 
 ---
 
-## Step 8 — Verify
+### Step 3 — Verify
 
 Run the verification script:
 
@@ -409,15 +253,15 @@ Example output:
 
 ---
 
-## Step 9 — Test Inference
+### Step 4 — Test Inference
 
-### Health check
+#### Health check
 
 ```bash
 curl http://192.168.3.120:8000/health
 ```
 
-### Chat completion
+#### Chat completion
 
 ```bash
 curl http://192.168.3.120:8000/v1/chat/completions \
@@ -429,7 +273,7 @@ curl http://192.168.3.120:8000/v1/chat/completions \
   }'
 ```
 
-### Streaming chat completion
+#### Streaming chat completion
 
 ```bash
 curl http://192.168.3.120:8000/v1/chat/completions \
@@ -442,7 +286,7 @@ curl http://192.168.3.120:8000/v1/chat/completions \
   }'
 ```
 
-### List available models
+#### List available models
 
 ```bash
 curl http://192.168.3.120:8000/v1/models
@@ -450,21 +294,21 @@ curl http://192.168.3.120:8000/v1/models
 
 ---
 
-## Step 10 — Monitor Logs
+### Step 5 — Monitor Logs
 
-### Head node logs
+#### Head node logs
 
 ```bash
 ssh santanu@192.168.3.120 docker logs -f sglang-head
 ```
 
-### Worker node logs
+#### Worker node logs
 
 ```bash
 ssh santanu@192.168.3.121 docker logs -f sglang-worker
 ```
 
-### GPU status
+#### GPU status
 
 ```bash
 # Head node
@@ -476,7 +320,7 @@ ssh santanu@192.168.3.121 nvidia-smi
 
 ---
 
-## Step 11 — Stop
+### Step 6 — Stop
 
 Stop all containers on both nodes:
 
@@ -692,6 +536,7 @@ on both nodes.
 ```bash
 ./deploy.sh dspark
 ```
+
 ### Stage NCCL 2.30.7 for deploy.sh
 
 If you use the legacy `deploy.sh`, stage the NCCL library on both nodes:
@@ -826,3 +671,170 @@ wait up to 30 minutes. If loading takes longer, check disk I/O speed.
 - [DSPARK topk=192 Issue](https://github.com/sgl-project/sglang/issues/33134)
 - [TP Rank Divergence Issue](https://github.com/sgl-project/sglang/issues/33289)
 - [vLLM DSv4-Flash on DGX Spark (reference)](https://github.com/tonyd2wild/DeepSeek-v4-Flash-DSpark-1M-NVFP4-KV-2x-DGX-Spark)
+
+---
+
+## Appendix: Initial Setup for Non-DGX-OS Systems
+
+> **Skip this section if your nodes run DGX OS.** DGX OS comes with Docker,
+> the NVIDIA Container Toolkit, GPU drivers, RDMA tools, and IB utilities
+> pre-installed. You only need to copy the model files and set up
+> passwordless SSH.
+
+If your nodes run vanilla Ubuntu (or a similar Linux distribution), follow
+these steps before you run the Quick Start section.
+
+### A.1 — Set Up Passwordless SSH
+
+The control machine must SSH into both nodes without a password.
+
+Run these commands on the control machine:
+
+```bash
+# Generate an SSH key if you do not have one
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
+
+# Copy the key to both nodes
+ssh-copy-id santanu@192.168.3.120
+ssh-copy-id santanu@192.168.3.121
+
+# Verify passwordless SSH works
+ssh santanu@192.168.3.120 "echo ok"
+ssh santanu@192.168.3.121 "echo ok"
+```
+
+If both commands print `ok`, continue to the next step.
+
+### A.2 — Install Docker and NVIDIA Container Toolkit
+
+Install Docker and the NVIDIA Container Toolkit on both nodes.
+
+SSH into each node and run:
+
+```bash
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+# Log out and log back in for the group change to take effect
+
+# Install NVIDIA Container Toolkit
+distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+
+# Configure Docker to use the NVIDIA runtime
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Verify Docker and GPU access:
+
+```bash
+docker info
+docker run --rm --gpus all lmsysorg/sglang:latest-cu130 nvidia-smi
+```
+
+Verify Docker Compose:
+
+```bash
+docker compose version
+```
+
+If `docker compose` is not available, install the Compose plugin:
+
+```bash
+sudo apt-get install -y docker-compose-plugin
+```
+
+### A.3 — Pull the SGLang Base Image
+
+Pull the SGLang base image on both nodes. This image is large. Use a fast
+network connection or be patient.
+
+Run on both nodes:
+
+```bash
+docker pull lmsysorg/sglang:latest-cu130
+```
+
+Verify the image is present:
+
+```bash
+docker images lmsysorg/sglang:latest-cu130
+```
+
+### A.4 — Download Model Files
+
+Download the DeepSeek-V4-Flash-0731 model files to both nodes. The model is
+156 GB. Make sure both nodes have enough disk space.
+
+Run on both nodes:
+
+```bash
+mkdir -p /home/santanu/data/models/DeepSeek-V4-Flash-0731
+cd /home/santanu/data/models/DeepSeek-V4-Flash-0731
+
+# Download model files from Hugging Face or your preferred source
+# Example:
+# huggingface-cli download deepseek-ai/DeepSeek-V4-Flash-0731 \
+#   --local-dir /home/santanu/data/models/DeepSeek-V4-Flash-0731
+```
+
+Verify the model directory:
+
+```bash
+ls -la /home/santanu/data/models/DeepSeek-V4-Flash-0731/
+# You should see 48 .safetensors files and config.json
+```
+
+### A.5 — Configure Clustering Network
+
+Connect the two nodes with a QSFP cable. Configure the clustering
+interface (RoCE) on both nodes.
+
+On Node 1 (ai1):
+
+```bash
+sudo ip addr add 192.168.100.10/24 dev enp1s0f1np1
+sudo ip link set enp1s0f1np1 up
+```
+
+On Node 2 (ai2):
+
+```bash
+sudo ip addr add 192.168.100.11/24 dev enp1s0f1np1
+sudo ip link set enp1s0f1np1 up
+```
+
+Verify connectivity:
+
+```bash
+# From Node 1
+ping -c 3 192.168.100.11
+
+# From Node 2
+ping -c 3 192.168.100.10
+```
+
+Find the RoCE HCA device name and GID index:
+
+```bash
+# On both nodes
+ibdev2netdev
+# Look for the device mapped to enp1s0f1np1 (e.g., rocep1s0f1)
+
+show_gids
+# Look for the GID index with RoCEv2 (IPv4) type
+```
+
+For a standard DGX Spark setup, the defaults are:
+
+- HCA: `rocep1s0f1`
+- GID index: `3`
+- Socket interface: `enp1s0f1np1`
+
+Once these steps are complete, go back to [Quick Start](#quick-start).
