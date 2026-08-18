@@ -1,0 +1,80 @@
+# =============================================================================
+# SGLang DSPARK — Head Node (Node 1, TP rank 0)
+# =============================================================================
+#
+# Run on: ai1 (head node)
+# Start this AFTER the worker node is up.
+#
+# Usage:
+#   docker compose -f docker-compose.head.yml up -d
+#
+
+services:
+  sglang-head:
+    image: sglang-dspark
+    container_name: sglang-head
+    network_mode: host
+    ipc: host
+    shm_size: "32g"
+    privileged: true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+    cap_add:
+      - IPC_LOCK
+    devices:
+      - /dev/infiniband
+    volumes:
+      - ${MODEL_PATH:-/home/santanu/data/models/DeepSeek-V4-Flash-0731}:/models/DeepSeek-V4-Flash-0731
+      - /dev/shm:/dev/shm
+    environment:
+      - NCCL_IB_DISABLE=0
+      - NCCL_IB_HCA=${NCCL_IB_HCA:-rocep1s0f1}
+      - NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-3}
+      - NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-enp1s0f1np1}
+      - GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-enp1s0f1np1}
+      - NCCL_DEBUG=INFO
+      - NCCL_CUMEM_ENABLE=0
+      - NCCL_IGNORE_CPU_AFFINITY=1
+      - SGLANG_JIT_DEEPGEMM_FAST_WARMUP=1
+    command: >
+      python3 -m sglang.launch_server
+      --model-path /models/DeepSeek-V4-Flash-0731
+      --host 0.0.0.0
+      --port ${SGLANG_PORT:-8000}
+      --tp 2
+      --nnodes 2
+      --node-rank 0
+      --dist-init-addr ${HEAD_CLUSTER_IP:-192.168.100.10}:${DIST_INIT_PORT:-20000}
+      --dist-timeout 3600
+      --trust-remote-code
+      --mem-fraction-static ${MEM_FRACTION:-0.85}
+      --context-length ${CONTEXT_LENGTH:-131072}
+      --chunked-prefill-size ${CHUNKED_PREFILL_SIZE:-4096}
+      --max-running-requests ${MAX_RUNNING_REQUESTS:-8}
+      --moe-runner-backend flashinfer_mxfp4
+      --moe-a2a-backend none
+      --swa-full-tokens-ratio 0.1
+      --disable-flashinfer-autotune
+      --kv-cache-dtype ${KV_CACHE_DTYPE:-fp8_e4m3}
+      --enable-dp-attention
+      --reasoning-parser deepseek-v4
+      --tool-call-parser deepseekv4
+      --skip-server-warmup
+      --watchdog-timeout ${WATCHDOG_TIMEOUT:-600}
+      --speculative-algorithm DSPARK
+      --speculative-dspark-block-size ${DSPARK_BLOCK_SIZE:-5}
+      --speculative-moe-runner-backend flashinfer_mxfp4
+      --cuda-graph-max-bs-decode ${MAX_RUNNING_REQUESTS:-8}
+      --enable-dp-lm-head
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    restart: "no"

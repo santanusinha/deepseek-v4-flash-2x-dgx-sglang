@@ -1,0 +1,19 @@
+# Environment file with local cluster configuration
+# Contains IP addresses and paths specific to this deployment.
+# Use .env.example as the template.
+.env
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
