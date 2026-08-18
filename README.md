@@ -672,27 +672,14 @@ DSPARK speculative decoding enabled.
 | 2 | 34.2 | 17.6 | 946 | 975 |
 | 4 | 52.3 | 14.2 | 1173 | 1551 |
 
-### DSPARK vs Non-DSPARK Comparison
-
-| Metric | Without DSPARK | With DSPARK | Improvement |
-|---|---|---|---|
-| Generation (single, pp128) | 15.2 tok/s | 31.1 tok/s | +105% |
-| Generation (single, pp512) | 15.5 tok/s | 25.2 tok/s | +63% |
-| Generation (single, pp2048) | 14.8 tok/s | 24.1 tok/s | +63% |
-| Generation (c4 total) | 46.1 tok/s | 52.3 tok/s | +13% |
-| Prefill (pp2048, depth=0) | 1229 t/s | 1159 t/s | -6% |
-| Prefill (pp128, depth=16k) | 1261 t/s | 1359 t/s | +8% |
-
 **Key takeaways:**
 
-- DSPARK gives 40-105% faster single-stream token generation.
-- Prefill speed is similar with and without DSPARK.
+- Single-stream token generation: 20-31 tok/s across prompt sizes and context depths.
 - Peak aggregate throughput at concurrency 4: 52.3 tok/s.
 - All 18 depth tests and 3 concurrency tests completed without crashes.
 
 ---
 
-## File Listing
 ## File Listing
 
 | File | Purpose |
