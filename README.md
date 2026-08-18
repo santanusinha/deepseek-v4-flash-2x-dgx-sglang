@@ -22,9 +22,10 @@ steps first.
 8. [Legacy deploy.sh](#legacy-deploysh)
 9. [Known Issues and Workarounds](#known-issues-and-workarounds)
 10. [Model Architecture](#model-architecture)
-11. [File Listing](#file-listing)
-12. [References](#references)
-13. [Appendix: Initial Setup for Non-DGX-OS Systems](#appendix-initial-setup-for-non-dgx-os-systems)
+11. [Benchmark Results](#benchmark-results)
+12. [File Listing](#file-listing)
+13. [References](#references)
+14. [Appendix: Initial Setup for Non-DGX-OS Systems](#appendix-initial-setup-for-non-dgx-os-systems)
 
 ---
 
@@ -644,7 +645,54 @@ wait up to 30 minutes. If loading takes longer, check disk I/O speed.
 | Disk size | 156 GB (48 safetensors files) |
 
 ---
+## Benchmark Results
 
+Benchmarked with `llama-benchy v0.4.0` on the 2x DGX Spark cluster with
+DSPARK speculative decoding enabled.
+
+### Single-Stream Token Generation (concurrency = 1)
+
+| Prompt Size | Context Depth | TG tok/s | PP tok/s | TTFR (ms) |
+|---|---|---|---|---|
+| 128 | 0 | 31.1 | 236 | 537 |
+| 128 | 4096 | 28.1 | 1284 | 3005 |
+| 128 | 16384 | 23.5 | 1359 | 10919 |
+| 512 | 0 | 25.2 | 625 | 760 |
+| 512 | 4096 | 28.0 | 1277 | 3341 |
+| 512 | 16384 | 20.7 | 1363 | 11148 |
+| 2048 | 0 | 24.1 | 1159 | 1636 |
+| 2048 | 4096 | 19.6 | 1295 | 4258 |
+| 2048 | 16384 | 23.3 | 1195 | 13875 |
+
+### Concurrency Scaling (pp=512, tg=128, depth=0)
+
+| Concurrency | Total TG tok/s | Per-Request TG tok/s | Total PP tok/s | TTFR (ms) |
+|---|---|---|---|---|
+| 1 | 27.0 | 27.0 | 617 | 722 |
+| 2 | 34.2 | 17.6 | 946 | 975 |
+| 4 | 52.3 | 14.2 | 1173 | 1551 |
+
+### DSPARK vs Non-DSPARK Comparison
+
+| Metric | Without DSPARK | With DSPARK | Improvement |
+|---|---|---|---|
+| Generation (single, pp128) | 15.2 tok/s | 31.1 tok/s | +105% |
+| Generation (single, pp512) | 15.5 tok/s | 25.2 tok/s | +63% |
+| Generation (single, pp2048) | 14.8 tok/s | 24.1 tok/s | +63% |
+| Generation (c4 total) | 46.1 tok/s | 52.3 tok/s | +13% |
+| Prefill (pp2048, depth=0) | 1229 t/s | 1159 t/s | -6% |
+| Prefill (pp128, depth=16k) | 1261 t/s | 1359 t/s | +8% |
+
+**Key takeaways:**
+
+- DSPARK gives 40-105% faster single-stream token generation.
+- Prefill speed is similar with and without DSPARK.
+- Peak aggregate throughput at concurrency 4: 52.3 tok/s.
+- All 18 depth tests and 3 concurrency tests completed without crashes.
+
+---
+
+## File Listing
 ## File Listing
 
 | File | Purpose |
