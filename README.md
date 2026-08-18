@@ -17,15 +17,16 @@ steps first.
 3. [Prerequisites](#3-prerequisites)
 4. [Quick Start](#quick-start)
 5. [Configuration Reference](#configuration-reference)
-6. [How the Custom Image Works](#how-the-custom-image-works)
-7. [Manual Deployment (Without deploy-compose.sh)](#manual-deployment-without-deploy-composesh)
-8. [Legacy deploy.sh](#legacy-deploysh)
-9. [Known Issues and Workarounds](#known-issues-and-workarounds)
-10. [Model Architecture](#model-architecture)
-11. [Benchmark Results](#benchmark-results)
-12. [File Listing](#file-listing)
-13. [References](#references)
-14. [Appendix: Initial Setup for Non-DGX-OS Systems](#appendix-initial-setup-for-non-dgx-os-systems)
+6. [SGLang Command Line Reference](#sglang-command-line-reference)
+7. [How the Custom Image Works](#how-the-custom-image-works)
+8. [Manual Deployment (Without deploy-compose.sh)](#manual-deployment-without-deploy-composesh)
+9. [Legacy deploy.sh](#legacy-deploysh)
+10. [Known Issues and Workarounds](#known-issues-and-workarounds)
+11. [Model Architecture](#model-architecture)
+12. [Benchmark Results](#benchmark-results)
+13. [File Listing](#file-listing)
+14. [References](#references)
+15. [Appendix: Initial Setup for Non-DGX-OS Systems](#appendix-initial-setup-for-non-dgx-os-systems)
 
 ---
 
@@ -373,7 +374,11 @@ environment or in `.env`.
 
 ### SGLang Server Flags
 
-The Docker Compose files pass these SGLang flags:
+For the complete list of SGLang command line flags, the full command,
+and container environment variables, see [SGLang Command Line
+Reference](#sglang-command-line-reference).
+
+The Docker Compose files pass these key SGLang flags:
 
 | Flag | Value | Purpose |
 |------|-------|---------|
@@ -395,6 +400,12 @@ The Docker Compose files pass these SGLang flags:
 | `--swa-full-tokens-ratio` | 0.1 | Sliding window attention ratio |
 | `--reasoning-parser` | deepseek-v4 | Reasoning content parser |
 | `--tool-call-parser` | deepseekv4 | Tool call parser |
+
+See also: `--model-path`, `--host`, `--port`, `--trust-remote-code`,
+`--chunked-prefill-size`, `--moe-a2a-backend`,
+`--disable-flashinfer-autotune`, `--skip-server-warmup`,
+`--speculative-moe-runner-backend`, `--cuda-graph-max-bs-decode`.
+
 
 ### RDMA/NCCL Configuration
 
@@ -418,6 +429,116 @@ Container flags for RDMA access:
 - `--shm-size 32g`
 - `--ipc host`
 - `--network host`
+
+---
+
+## SGLang Command Line Reference
+
+This section shows the exact command line that SGLang runs inside each
+container. Both head and worker nodes use the same flags. The only difference
+is `--node-rank`.
+
+### Full Command (Head Node, rank 0)
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path /models/DeepSeek-V4-Flash-0731 \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --tp 2 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --dist-init-addr 192.168.100.10:20000 \
+  --dist-timeout 3600 \
+  --trust-remote-code \
+  --mem-fraction-static 0.85 \
+  --context-length 131072 \
+  --chunked-prefill-size 4096 \
+  --max-running-requests 8 \
+  --moe-runner-backend flashinfer_mxfp4 \
+  --moe-a2a-backend none \
+  --swa-full-tokens-ratio 0.1 \
+  --disable-flashinfer-autotune \
+  --kv-cache-dtype fp8_e4m3 \
+  --enable-dp-attention \
+  --reasoning-parser deepseek-v4 \
+  --tool-call-parser deepseekv4 \
+  --skip-server-warmup \
+  --watchdog-timeout 600 \
+  --speculative-algorithm DSPARK \
+  --speculative-dspark-block-size 5 \
+  --speculative-moe-runner-backend flashinfer_mxfp4 \
+  --cuda-graph-max-bs-decode 8 \
+  --enable-dp-lm-head
+```
+
+### Full Command (Worker Node, rank 1)
+
+The worker command is identical to the head command. The only difference is
+`--node-rank 1`:
+
+```bash
+  --node-rank 1
+```
+
+All other flags are the same on both nodes.
+
+### Complete SGLang Flag Reference
+
+The table below lists every SGLang flag, its value, and its purpose.
+
+| Flag | Value | Purpose |
+|------|-------|---------|
+| `--model-path` | `/models/DeepSeek-V4-Flash-0731` | Model directory (mounted from host) |
+| `--host` | `0.0.0.0` | Listen on all interfaces |
+| `--port` | `8000` | API port |
+| `--tp` | `2` | Tensor parallel size (1 GPU per node x 2 nodes) |
+| `--nnodes` | `2` | Number of nodes in the cluster |
+| `--node-rank` | `0` (head) / `1` (worker) | This node's rank in the cluster |
+| `--dist-init-addr` | `192.168.100.10:20000` | Distributed init address (head cluster IP) |
+| `--dist-timeout` | `3600` | Distributed init timeout in seconds |
+| `--trust-remote-code` | — | Allow custom model code execution |
+| `--mem-fraction-static` | `0.85` | Static memory fraction for KV cache |
+| `--context-length` | `131072` | Max context length in tokens |
+| `--chunked-prefill-size` | `4096` | Chunked prefill size in tokens |
+| `--max-running-requests` | `8` | Max concurrent inference requests |
+| `--moe-runner-backend` | `flashinfer_mxfp4` | MoE kernel backend for FP4 quantization |
+| `--moe-a2a-backend` | `none` | No all-to-all backend (single GPU per node) |
+| `--swa-full-tokens-ratio` | `0.1` | Sliding window attention full tokens ratio |
+| `--disable-flashinfer-autotune` | — | Disable FlashInfer autotuning at startup |
+| `--kv-cache-dtype` | `fp8_e4m3` | KV cache compression format |
+| `--enable-dp-attention` | — | Data-parallel attention (bypasses cross-node IPC) |
+| `--reasoning-parser` | `deepseek-v4` | Reasoning content parser |
+| `--tool-call-parser` | `deepseekv4` | Tool call parser |
+| `--skip-server-warmup` | — | Skip server warmup phase |
+| `--watchdog-timeout` | `600` | Scheduler watchdog timeout in seconds |
+| `--speculative-algorithm` | `DSPARK` | Speculative decoding algorithm |
+| `--speculative-dspark-block-size` | `5` | DSPARK draft block size |
+| `--speculative-moe-runner-backend` | `flashinfer_mxfp4` | MoE backend for draft model |
+| `--cuda-graph-max-bs-decode` | `8` | CUDA graph max batch size for decode |
+| `--enable-dp-lm-head` | — | Data-parallel LM head (required for DSPARK) |
+
+### Container Environment Variables
+
+Both head and worker containers set these environment variables. They control
+NCCL, Gloo, and SGLang runtime behavior.
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `NCCL_IB_DISABLE` | `0` | Enable InfiniBand transport |
+| `NCCL_IB_HCA` | `rocep1s0f1` | RoCE HCA device name |
+| `NCCL_IB_GID_INDEX` | `3` | RoCEv2 IPv4 GID index |
+| `NCCL_SOCKET_IFNAME` | `enp1s0f1np1` | NCCL socket interface (clustering network) |
+| `GLOO_SOCKET_IFNAME` | `enp1s0f1np1` | Gloo socket interface (same as NCCL) |
+| `NCCL_DEBUG` | `INFO` | NCCL debug log level |
+| `NCCL_CUMEM_ENABLE` | `0` | Disable NCCL CUDA memory management |
+| `NCCL_IGNORE_CPU_AFFINITY` | `1` | Ignore CPU affinity issues on aarch64 |
+| `SGLANG_JIT_DEEPGEMM_FAST_WARMUP` | `1` | Speed up DeepGEMM JIT warmup |
+| `SGLANG_NCCL_SO_PATH` | NCCL 2.30.7 library path | Override torch-bundled NCCL with upgraded version |
+
+The `SGLANG_NCCL_SO_PATH` variable is set in the Dockerfile. It points to
+the NCCL 2.30.7 library installed from the `.deb` package. See [How the
+Custom Image Works](#how-the-custom-image-works) for details.
 
 ---
 
